@@ -1,12 +1,68 @@
-fastapi==0.116.1
-uvicorn==0.35.0
-pydantic==2.11.7
-python-dotenv==1.1.1
+# ==========================
+# Backend
+# ==========================
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+python-dotenv
 
+# ==========================
+# RAG Framework
+# ==========================
 langchain
 langchain-community
+langchain-text-splitters
 
-pymupdf
+# ==========================
+# Document Parsing
+# ==========================
+docling
 python-docx
 
+# OCR
+pytesseract
+Pillow
+
+# ==========================
+# Vector Database
+# ==========================
+chromadb
+
+# ==========================
+# Embedding Models
+# ==========================
+sentence-transformers
+
+# ==========================
+# Sparse Retrieval
+# ==========================
+rank-bm25
+
+# ==========================
+# LLM
+# ==========================
+google-generativeai
+
+# ==========================
+# Evaluation
+# ==========================
+ragas
+deepeval
+
+# ==========================
+# Frontend
+# ==========================
+streamlit
+
+# ==========================
+# Data Processing
+# ==========================
+numpy
+pandas
+scikit-learn
+
+# ==========================
+# Utilities
+# ==========================
 tqdm
