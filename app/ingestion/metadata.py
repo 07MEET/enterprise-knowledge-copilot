@@ -9,9 +9,12 @@ def generate_metadata(file_path: Path) -> dict:
     """
 
     category = file_path.parent.name.replace("_", " ")
+    
+    # Deterministic document_id based on relative path to avoid duplication on re-indexing
+    document_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, file_path.as_posix()))
 
     return {
-        "document_id": str(uuid.uuid4()),
+        "document_id": document_id,
         "source": file_path.name,
         "category": category,
         "document_type": file_path.suffix.lower(),

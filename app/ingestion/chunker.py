@@ -38,10 +38,12 @@ class Chunker:
         sections = self.header_splitter.split_text(markdown)
 
         for section in sections:
+            # Merge document-level metadata with section headers (h1, h2, h3)
+            combined_metadata = {**metadata, **section.metadata}
 
             documents = self.recursive_splitter.create_documents(
                 [section.page_content],
-                metadatas=[metadata],
+                metadatas=[combined_metadata],
             )
 
             for document in documents:
