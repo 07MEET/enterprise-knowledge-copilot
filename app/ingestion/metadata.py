@@ -8,7 +8,7 @@ def generate_metadata(file_path: Path) -> dict:
     Generate metadata for a document.
     """
 
-    category = file_path.parent.name
+    category = file_path.parent.name.replace("_", " ")
 
     return {
         "document_id": str(uuid.uuid4()),

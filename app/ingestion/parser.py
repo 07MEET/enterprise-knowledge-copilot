@@ -5,9 +5,7 @@ from docling.document_converter import DocumentConverter
 
 class DocumentParser:
     """
-    Enterprise document parser.
-
-    Uses Docling to convert enterprise documents into structured Markdown.
+    Enterprise document parser using Docling.
     """
 
     def __init__(self):
@@ -17,14 +15,13 @@ class DocumentParser:
         """
         Parse a single document.
 
-        Parameters
-        ----------
-        file_path : Path
-
         Returns
         -------
         DoclingDocument
         """
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"Document not found: {file_path}")
 
         result = self.converter.convert(file_path)
 
