@@ -25,9 +25,13 @@ class RAGEvaluator:
 
     def __init__(self):
         """
-        Initialize the Gemini audit client and load the Golden Q&A evaluation dataset.
+        Initialize the audit client and load the Golden Q&A evaluation dataset.
         """
-        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        if settings.USE_LOCAL:
+            import ollama
+            self.client = ollama.Client(host=settings.OLLAMA_BASE_URL)
+        else:
+            self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model = settings.LLM_MODEL
 
         # Golden evaluation dataset
@@ -49,24 +53,30 @@ class RAGEvaluator:
             },
         ]
 
-    def evaluate_faithfulness(
+    def _evaluate_metric(
         self,
-        context: str,
-        answer: str,
+        prompt: str,
+        system_instruction: str,
     ) -> tuple[float, str]:
         """
-        Evaluate if the generated answer is fully grounded in the retrieved context.
+        Evaluate a metric using either Ollama or Gemini.
         """
-        prompt = (
-            f"Retrieved Context:\n{context}\n\n"
-            f"Generated Answer:\n{answer}\n"
-        )
-        system_instruction = (
-            "You are a strict QA auditor. Evaluate if the Generated Answer is fully grounded in "
-            "the Retrieved Context. If the answer contains any facts, numbers, or assertions NOT "
-            "found in the context, rate faithfulness low. Return a JSON object matching schema: "
-            "{'score': float, 'reason': str} where score is between 0.0 and 1.0."
-        )
+        if settings.USE_LOCAL:
+            try:
+                res = self.client.chat(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ],
+                    options={"temperature": 0.0, "num_ctx": 8192, "num_predict": 4096}
+                )
+                from app.utils.json_parser import clean_json_string
+                parsed = MetricScore.model_validate_json(clean_json_string(res["message"]["content"]))
+                return parsed.score, parsed.reason
+            except Exception as e:
+                return 0.0, "Evaluation timed out or returned empty response."
+
         try:
             res = self.client.models.generate_content(
                 model=self.model,
@@ -81,6 +91,26 @@ class RAGEvaluator:
             return res.parsed.score, res.parsed.reason
         except Exception as e:
             return 0.0, f"Error: {e}"
+
+    def evaluate_faithfulness(
+        self,
+        context: str,
+        answer: str,
+    ) -> tuple[float, str]:
+        """
+        Evaluate if the generated answer is fully grounded in the retrieved context.
+        """
+        prompt = (
+            f"Retrieved Context:\n{context}\n\n"
+            f"Generated Answer:\n{answer}\n"
+        )
+        system_instruction = (
+            "You are a strict QA auditor. Check if the Generated Answer is fully grounded in the Retrieved Context. "
+            "Respond ONLY with a JSON object: "
+            '{"score": float, "reason": str} '
+            "where score is 1.0 if the answer is grounded, or 0.0 if not. Keep the reason under 10 words."
+        )
+        return self._evaluate_metric(prompt, system_instruction)
 
     def evaluate_context_recall(
         self,
@@ -95,25 +125,12 @@ class RAGEvaluator:
             f"Ground Truth Answer:\n{ground_truth}\n"
         )
         system_instruction = (
-            "You are an information retrieval judge. Check if the Retrieved Context contains "
-            "all the key factual information listed in the Ground Truth Answer. If facts from the "
-            "ground truth are missing in the context, penalize the recall. Return a JSON object: "
-            "{'score': float, 'reason': str} where score is between 0.0 and 1.0."
+            "You are an information retrieval judge. Check if the Retrieved Context contains the facts in the Ground Truth. "
+            "Respond ONLY with a JSON object: "
+            '{"score": float, "reason": str} '
+            "where score is 1.0 if the facts are in the context, or 0.0 if not. Keep the reason under 10 words."
         )
-        try:
-            res = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=MetricScore,
-                    temperature=0.0,
-                ),
-            )
-            return res.parsed.score, res.parsed.reason
-        except Exception as e:
-            return 0.0, f"Error: {e}"
+        return self._evaluate_metric(prompt, system_instruction)
 
     def evaluate_answer_relevance(
         self,
@@ -128,25 +145,12 @@ class RAGEvaluator:
             f"Generated Answer:\n{answer}\n"
         )
         system_instruction = (
-            "You are a customer satisfaction auditor. Rate whether the Generated Answer directly "
-            "and clearly addresses the User Question. Penalize if the answer is circular, vague, or "
-            "avoids the question. Return a JSON object: {'score': float, 'reason': str} where score "
-            "is between 0.0 and 1.0."
+            "You are a customer satisfaction auditor. Rate whether the Generated Answer addresses the User Question. "
+            "Respond ONLY with a JSON object: "
+            '{"score": float, "reason": str} '
+            "where score is 1.0 if relevant, or 0.0 if not. Keep the reason under 10 words."
         )
-        try:
-            res = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=MetricScore,
-                    temperature=0.0,
-                ),
-            )
-            return res.parsed.score, res.parsed.reason
-        except Exception as e:
-            return 0.0, f"Error: {e}"
+        return self._evaluate_metric(prompt, system_instruction)
 
     def run_evaluation(
         self, output_path: str = "docs/evaluation_report.md"

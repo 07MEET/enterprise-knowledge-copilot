@@ -9,7 +9,7 @@ class Citation(BaseModel):
     """
 
     source: str
-    page: int | None = None
+    page: int | str | None = None
     section: str | None = None
 
 

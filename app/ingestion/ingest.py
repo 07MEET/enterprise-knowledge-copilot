@@ -55,15 +55,27 @@ class IngestionPipeline:
         print(f"Found {len(files_to_process)} documents to process.")
 
         for file_path in files_to_process:
-            print(f"Processing: {file_path.name}")
             try:
-                # 1. Parse document using Docling
-                document = self.parser.parse(file_path)
-                markdown = document.export_to_markdown()
-
-                # 2. Generate metadata
+                # 1. Generate metadata and document_id (fast check)
                 metadata = generate_metadata(file_path)
                 document_id = metadata["document_id"]
+
+                # Skip if already indexed in database (unless a rebuild is requested)
+                if not rebuild:
+                    try:
+                        res = self.vector_store.collection.get(
+                            where={"document_id": document_id}, limit=1, include=[]
+                        )
+                        if res and res["ids"]:
+                            print(f"Document already indexed, skipping: {file_path.name}")
+                            continue
+                    except Exception as check_err:
+                        print(f"Error checking index status for {file_path.name}: {check_err}")
+
+                print(f"Processing: {file_path.name}")
+                # 2. Parse document using Docling (slow OCR step)
+                document = self.parser.parse(file_path)
+                markdown = document.export_to_markdown()
 
                 # 3. Save processed markdown file while preserving category folders
                 category_folder = (
@@ -82,8 +94,15 @@ class IngestionPipeline:
                 )
                 parsed_documents.append(parsed_doc)
 
+                # Generate paragraph-to-page-number mapping from DoclingDocument texts
+                page_mapping = {}
+                if hasattr(document, "texts"):
+                    for item in document.texts:
+                        if item.text and item.prov:
+                            page_mapping[item.text.strip()] = item.prov[0].page_no
+
                 # 4. Chunk document
-                chunks = self.chunker.split(markdown, metadata)
+                chunks = self.chunker.split(markdown, metadata, page_mapping)
                 if not chunks:
                     print(
                         f"No chunks produced for document: {file_path.name}"

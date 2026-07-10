@@ -7,6 +7,7 @@ from app.embeddings.factory import get_embedding_model
 from app.models.document_models import Chunk, RetrievedChunk
 from app.retrieval.bm25_retriever import BM25Retriever
 from app.storage.vector_store import VectorStore
+from app.utils.rate_limiter import call_with_retry
 
 
 class ChunkRelevance(BaseModel):
@@ -33,19 +34,24 @@ class HybridRetriever:
 
     def __init__(self):
         """
-        Initialize vector store, sparse retriever, embedding model, and Gemini client.
+        Initialize vector store, sparse retriever, embedding model, and generation client.
         """
+        self.embedder = get_embedding_model()
         self.vector_store = VectorStore()
         self.bm25_retriever = BM25Retriever()
-        self.embedder = get_embedding_model()
-        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        if settings.USE_LOCAL:
+            import ollama
+            self.client = ollama.Client(host=settings.OLLAMA_BASE_URL)
+        else:
+            from google import genai
+            self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     def retrieve(
         self,
         query: str,
-        top_k: int = 5,
-        dense_k: int = 20,
-        sparse_k: int = 20,
+        top_k: int = 10,
+        dense_k: int = 25,
+        sparse_k: int = 25,
         rerank: bool = True,
     ) -> list[RetrievedChunk]:
         """
@@ -76,12 +82,12 @@ class HybridRetriever:
             sparse_results,
         )
 
-        # If reranking is disabled or database is empty, return top fused results
-        if not rerank or not fused_results:
+        # If reranking is disabled, running locally, or database is empty, return top fused results
+        if not rerank or settings.USE_LOCAL or not fused_results:
             return fused_results[:top_k]
 
-        # 4. LLM Reranking pass on top 15 fused candidates
-        chunks_to_rerank = fused_results[:15]
+        # 4. LLM Reranking pass on top 5 fused candidates
+        chunks_to_rerank = fused_results[:5]
         reranked_results = self.rerank_chunks(
             query,
             chunks_to_rerank,
@@ -142,7 +148,7 @@ class HybridRetriever:
         retrieved_chunks: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
         """
-        Rerank a selection of retrieved chunks using Gemini 3.5 Flash as an evaluator.
+        Rerank a selection of retrieved chunks using Gemini or Ollama as an evaluator.
         """
         if not retrieved_chunks:
             return []
@@ -162,17 +168,56 @@ class HybridRetriever:
             f"Rate the relevance of each chunk to answering the query on a scale from 0.0 to 10.0."
         )
 
+        system_instruction = (
+            "You are an expert search engine reranker. Rate each chunk index's relevance "
+            "to the query. Return a JSON object with 'rankings' containing objects with "
+            "'index' and 'score' attributes. Assign a high score (up to 10.0) if the chunk contains "
+            "direct answers or necessary details to address the query. Otherwise, assign low scores."
+        )
+
+        if settings.USE_LOCAL:
+            try:
+                response = self.client.chat(
+                    model=settings.LLM_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ],
+                    options={"temperature": 0.0, "num_ctx": 8192, "num_predict": 4096}
+                )
+                content = response["message"]["content"]
+                from app.utils.json_parser import clean_json_string
+                ranking_data = RerankingResponse.model_validate_json(clean_json_string(content))
+
+                scored_chunks = []
+                score_map = {
+                    item.index: item.score for item in ranking_data.rankings
+                }
+
+                for idx, item in enumerate(retrieved_chunks):
+                    llm_score = score_map.get(idx, 0.0)
+                    retrieved_item = RetrievedChunk(
+                        chunk=item.chunk,
+                        score=float(llm_score),
+                        retrieval_method="reranked",
+                    )
+                    scored_chunks.append(retrieved_item)
+
+                scored_chunks.sort(key=lambda x: x.score, reverse=True)
+                return scored_chunks
+
+            except Exception as e:
+                print(f"Local Reranking failed: {e}. Raw content: '{content if 'content' in locals() else ''}'. Falling back to RRF rankings.")
+                return retrieved_chunks
+
+        from google.genai import types
         try:
-            response = self.client.models.generate_content(
+            response = call_with_retry(
+                self.client.models.generate_content,
                 model=settings.LLM_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=(
-                        "You are an expert search engine reranker. Rate each chunk index's relevance "
-                        "to the query. Return a JSON object with 'rankings' containing objects with "
-                        "'index' and 'score' attributes. Assign a high score (up to 10.0) if the chunk contains "
-                        "direct answers or necessary details to address the query. Otherwise, assign low scores."
-                    ),
+                    system_instruction=system_instruction,
                     response_mime_type="application/json",
                     response_schema=RerankingResponse,
                     temperature=0.0,

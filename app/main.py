@@ -1,3 +1,9 @@
+# Initialize PyTorch CUDA first to prevent library conflicts causing segmentation faults
+import torch
+from sentence_transformers import SentenceTransformer
+device = "cuda" if torch.cuda.is_available() else "cpu"
+_ = SentenceTransformer("BAAI/bge-large-en-v1.5", device=device)
+
 from fastapi import FastAPI
 
 from app.api.root import router as root_router

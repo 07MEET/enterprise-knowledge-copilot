@@ -34,6 +34,8 @@ chromadb
 # Embeddings & LLM
 # =====================================
 google-genai
+sentence-transformers
+ollama
 
 # =====================================
 # Sparse Retrieval
@@ -61,3 +63,4 @@ scikit-learn
 # Utilities
 # =====================================
 tqdm
+requests

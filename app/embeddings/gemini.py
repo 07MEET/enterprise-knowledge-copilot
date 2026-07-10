@@ -2,20 +2,19 @@ from google import genai
 
 from app.config.settings import settings
 from app.embeddings.base import BaseEmbeddingModel
+from app.utils.rate_limiter import call_with_retry
 
 
 class GeminiEmbeddingModel(BaseEmbeddingModel):
     """
-    Gemini Embedding model implementation.
+    Gemini Embedding model implementation with automatic rate-limit backoff.
     """
 
     def __init__(self) -> None:
         """
         Initialize the Gemini embedding client.
         """
-        self.client = genai.Client(
-            api_key=settings.GEMINI_API_KEY
-        )
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model = settings.EMBEDDING_MODEL
 
     def embed_documents(
@@ -23,27 +22,31 @@ class GeminiEmbeddingModel(BaseEmbeddingModel):
         texts: list[str],
     ) -> list[list[float]]:
         """
-        Generate embeddings for multiple texts.
+        Generate embeddings for multiple texts one-by-one with rate-limit retries.
         """
         if not texts:
             return []
 
-        # Batch call to Gemini embed_content API
-        response = self.client.models.embed_content(
-            model=self.model,
-            contents=texts,
-        )
+        embeddings = []
+        for text in texts:
+            response = call_with_retry(
+                self.client.models.embed_content,
+                model=self.model,
+                contents=text,
+            )
+            embeddings.append(response.embeddings[0].values)
 
-        return [emb.values for emb in response.embeddings]
+        return embeddings
 
     def embed_query(
         self,
         text: str,
     ) -> list[float]:
         """
-        Generate embedding for a query.
+        Generate embedding for a query with rate-limit retries.
         """
-        response = self.client.models.embed_content(
+        response = call_with_retry(
+            self.client.models.embed_content,
             model=self.model,
             contents=text,
         )

@@ -31,7 +31,7 @@ class Chunker:
             )
         )
 
-    def split(self, markdown: str, metadata: dict):
+    def split(self, markdown: str, metadata: dict, page_mapping: dict = None):
 
         chunks = []
 
@@ -47,12 +47,40 @@ class Chunker:
             )
 
             for document in documents:
+                # Resolve physical page numbers from page_mapping (handling page crossings)
+                chunk_pages = set()
+                if page_mapping:
+                    chunk_text_stripped = document.page_content.strip()
+                    # Try exact paragraph matching
+                    for para_text, page_no in page_mapping.items():
+                        if len(para_text) > 10 and para_text in chunk_text_stripped:
+                            chunk_pages.add(page_no)
+                    # Fallback to line overlap matching
+                    lines = [l.strip() for l in document.page_content.split("\n") if len(l.strip()) > 40]
+                    for line in lines:
+                        for para_text, page_no in page_mapping.items():
+                            if len(para_text) > 10 and (line in para_text or para_text in line):
+                                chunk_pages.add(page_no)
+
+                # Add page or page range to combined metadata
+                doc_metadata = combined_metadata.copy()
+                if chunk_pages:
+                    sorted_pages = sorted(list(chunk_pages))
+                    # A single chunk of 800 chars cannot span more than 2 pages.
+                    # Spans larger than 2 pages are false positives from running headers/footers.
+                    if len(sorted_pages) > 1 and (sorted_pages[-1] - sorted_pages[0] > 2):
+                        sorted_pages = [sorted_pages[0]]
+
+                    if len(sorted_pages) == 1:
+                        doc_metadata["page"] = sorted_pages[0]
+                    else:
+                        doc_metadata["page"] = f"{sorted_pages[0]}-{sorted_pages[-1]}"
 
                 chunks.append(
                     Chunk(
                         chunk_id=str(uuid.uuid4()),
                         text=document.page_content,
-                        metadata=document.metadata,
+                        metadata=doc_metadata,
                     )
                 )
 

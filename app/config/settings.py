@@ -32,13 +32,15 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 150
 
     # ==========================
-    # Gemini
+    # Gemini / Local Models
     # ==========================
-    GEMINI_API_KEY: str
+    GEMINI_API_KEY: str | None = None
+    USE_LOCAL: bool = True
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
 
-    EMBEDDING_MODEL: str = "models/gemini-embedding-2"
+    EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
 
-    LLM_MODEL: str = "models/gemini-3.5-flash"
+    LLM_MODEL: str = "llama3.2"
 
 
 settings = Settings()
