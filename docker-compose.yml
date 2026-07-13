@@ -1,6 +1,35 @@
 version: '3.8'
 
 services:
+  # 1. Local Ollama Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ekc-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_storage:/root/.ollama
+    restart: unless-stopped
+
+  # 2. Automated Model Puller Sidecar
+  ollama-model-puller:
+    image: curlimages/curl:latest
+    container_name: ekc-model-puller
+    depends_on:
+      - ollama
+    entrypoint: [ "/bin/sh", "-c" ]
+    command: >
+      "
+      echo 'Waiting for Ollama service to start...'
+      until curl -s http://ollama:11434/api/tags > /dev/null; do
+        sleep 2
+      done
+      echo 'Ollama service is up! Pulling Llama 3.2 model...'
+      curl -d '{\"name\": \"llama3.2\"}' http://ollama:11434/api/pull
+      echo 'Llama 3.2 model pulled successfully!'
+      "
+
+  # 3. FastAPI Backend Service
   backend:
     build:
       context: .
@@ -12,11 +41,13 @@ services:
       - ./data:/workspace/data
       - ./.env:/workspace/.env
     environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+      - ollama-model-puller
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
+  # 4. Streamlit Frontend Service
   frontend:
     build:
       context: .

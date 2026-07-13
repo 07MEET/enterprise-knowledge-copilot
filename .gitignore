@@ -7,9 +7,6 @@ __pycache__/
 .venv/
 env/
 
-# Conda
-.env
-
 # Environment Variables
 .env
 
@@ -26,6 +23,8 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+# DeepEval (unused)
 .deepeval/
 
 # Python cache
@@ -34,3 +33,6 @@ data/processed/*
 # OS
 .DS_Store
 Thumbs.db
+
+# Docker Ollama model storage
+ollama_storage/

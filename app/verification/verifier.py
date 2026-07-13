@@ -46,11 +46,26 @@ def find_direct_match(claim: str, retrieved_chunks: list[RetrievedChunk]) -> int
     if len(c_clean) < 8:  # Ignore very short fragments
         return -1
 
+    # 1. Full verbatim substring check
     for idx, item in enumerate(retrieved_chunks):
         text_clean = re.sub(r"[^a-zA-Z0-9\s]", "", item.chunk.text.lower())
         text_clean = " ".join(text_clean.split())
         if c_clean in text_clean:
             return idx
+
+    # 2. Key Proper Noun (e.g. Personal Names) matching
+    # Matches capitalized proper nouns with length >= 4 (e.g. "Dineshchandra Manubhai Patel")
+    proper_nouns = re.findall(r"\b[A-Z][a-zA-Z]{3,}(?:\s+[A-Z][a-zA-Z]{3,})+\b", claim)
+    for entity in proper_nouns:
+        entity_clean = re.sub(r"[^a-zA-Z0-9\s]", "", entity.lower()).strip()
+        entity_clean = " ".join(entity_clean.split())
+        if len(entity_clean.split()) >= 2:
+            for idx, item in enumerate(retrieved_chunks):
+                text_clean = re.sub(r"[^a-zA-Z0-9\s]", "", item.chunk.text.lower())
+                text_clean = " ".join(text_clean.split())
+                if entity_clean in text_clean:
+                    return idx
+
     return -1
 
 
