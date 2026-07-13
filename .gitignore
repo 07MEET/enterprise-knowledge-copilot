@@ -23,6 +23,7 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/web_uploaded.json
 
 # DeepEval (unused)
 .deepeval/

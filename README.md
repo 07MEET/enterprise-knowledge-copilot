@@ -113,7 +113,7 @@ You only need **Docker Desktop** installed.
 
 1. Clone the repository and navigate into it:
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/07MEET/enterprise-knowledge-copilot.git
    cd enterprise-knowledge-copilot
    ```
 2. Build and run the stack:
