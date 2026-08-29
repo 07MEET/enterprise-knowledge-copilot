@@ -1,11 +1,10 @@
 import time
 import re
 from pathlib import Path
-from google import genai
-from google.genai import types
 from pydantic import BaseModel
 
 from app.config.settings import settings
+from app.llm.provider import llm
 from app.models.response_models import QueryResponse
 from app.services.query_service import answer_question, retriever
 
@@ -28,11 +27,6 @@ class RAGEvaluator:
         """
         Initialize the audit client and load the Golden Q&A evaluation dataset.
         """
-        if settings.USE_LOCAL:
-            import ollama
-            self.client = ollama.Client(host=settings.OLLAMA_BASE_URL)
-        else:
-            self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model = settings.LLM_MODEL
 
         # Golden evaluation dataset aligned with active workspace documents
@@ -145,38 +139,19 @@ class RAGEvaluator:
         system_instruction: str,
     ) -> tuple[float, str]:
         """
-        Evaluate a metric using either Ollama or Gemini.
+        Evaluate a metric using the configured LLM provider.
         """
-        if settings.USE_LOCAL:
-            try:
-                res = self.client.chat(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": prompt}
-                    ],
-                    options={"temperature": 0.0, "num_ctx": 8192, "num_predict": 4096}
-                )
-                from app.utils.json_parser import clean_json_string
-                parsed = MetricScore.model_validate_json(clean_json_string(res["message"]["content"]))
-                return parsed.score, parsed.reason
-            except Exception as e:
-                return 0.0, "Evaluation timed out or returned empty response."
-
         try:
-            res = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=MetricScore,
-                    temperature=0.0,
-                ),
+            from app.utils.json_parser import clean_json_string
+            content = llm.chat(
+                system_prompt=system_instruction,
+                user_prompt=prompt,
+                temperature=0.0,
             )
-            return res.parsed.score, res.parsed.reason
+            parsed = MetricScore.model_validate_json(clean_json_string(content))
+            return parsed.score, parsed.reason
         except Exception as e:
-            return 0.0, f"Error: {e}"
+            return 0.0, f"Evaluation error: {e}"
 
     def evaluate_faithfulness(
         self,

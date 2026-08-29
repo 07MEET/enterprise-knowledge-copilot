@@ -33,9 +33,13 @@ chromadb
 # =====================================
 # Embeddings & LLM
 # =====================================
+# OpenRouter / OpenAI-compatible providers
+openai
+# Local Ollama
+ollama
+# Google Gemini (optional fallback)
 google-genai
 sentence-transformers
-ollama
 
 # =====================================
 # Sparse Retrieval

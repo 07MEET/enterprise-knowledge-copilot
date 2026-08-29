@@ -1,8 +1,8 @@
 import re
-from google.genai import types
 from pydantic import BaseModel
 
 from app.config.settings import settings
+from app.llm.provider import llm
 from app.models.document_models import RetrievedChunk
 from app.models.response_models import Citation
 from app.utils.rate_limiter import call_with_retry
@@ -78,24 +78,21 @@ class CitationVerifier:
         """
         Initialize the verification client.
         """
-        if settings.USE_LOCAL:
-            import ollama
-
-            self.client = ollama.Client(host=settings.OLLAMA_BASE_URL)
-        else:
-            from google import genai
-
-            self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model = settings.LLM_MODEL
 
     def verify(
         self,
         answer: str,
         retrieved_chunks: list[RetrievedChunk],
+        query: str = "",
     ) -> tuple[str, list[Citation], float, list[str]]:
         """
         Verify every claim sentence in the answer text by aligning it to the retrieved chunks.
+        Accepts optional query to enable source-aware verification (reject cross-document citations).
         """
+        # Clean the input answer by stripping existing citation brackets [N]
+        answer = re.sub(r"\s*\[[0-9]+\]", "", answer)
+
         # Refusal check
         refusal_phrases = [
             "i don't have enough information",
@@ -108,14 +105,22 @@ class CitationVerifier:
         # 1. Split answer into distinct sentences/claims
         raw_sentences = []
         for line in answer.split("\n"):
-            if line.strip():
-                # Split each line by sentence-ending punctuation
-                parts = [
-                    p.strip()
-                    for p in re.split(r"(?<=[.!?])\s+", line)
-                    if len(p.strip()) > 10
-                ]
-                raw_sentences.extend(parts)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Skip Markdown table rows, separator rows, and HTML-only lines
+            if stripped.startswith("|") or stripped.startswith(":---") or stripped.startswith("---"):
+                continue
+            # Skip lines that are pure headings (no citation bracket) with no factual content
+            if stripped.startswith("#"):
+                continue
+            # Split each line by sentence-ending punctuation
+            parts = [
+                p.strip()
+                for p in re.split(r"(?<=[.!?])\s+", stripped)
+                if len(p.strip()) > 15  # raise minimum length to skip short fragments
+            ]
+            raw_sentences.extend(parts)
 
         if not raw_sentences:
             return answer, [], 1.0, []
@@ -137,77 +142,59 @@ class CitationVerifier:
         if claims_to_send:
             chunks_text = ""
             for idx, item in enumerate(retrieved_chunks):
-                chunks_text += f"--- CHUNK {idx} ---\n{item.chunk.text}\n\n"
+                source = item.chunk.metadata.get("source", "Unknown")
+                chunks_text += f"--- CHUNK {idx} | DOCUMENT: {source} ---\n{item.chunk.text}\n\n"
 
             claims_text = ""
             for idx_in_send, c_idx, claim_text in claims_to_send:
                 claims_text += f"Claim {idx_in_send}: {claim_text}\n"
 
             prompt = (
-                f"Retrieved Chunks:\n{chunks_text}\n"
+                f"User Question: {query}\n\n"
+                f"Retrieved Chunks (each labeled with its DOCUMENT source):\n{chunks_text}\n"
                 f"Claims to Verify:\n{claims_text}\n"
             )
             system_instruction = (
-                "You are a factual verifier. Check which Retrieved Chunk (by index 0, 1, 2...) directly supports each Claim.\n"
-                "For each claim, identify the supporting chunk index. If a claim is not supported by any chunk, return -1.\n"
-                "Respond ONLY with a JSON object of this schema:\n"
+                "You are a factual verifier. For each Claim, find which Retrieved Chunk directly supports it.\n"
+                "IMPORTANT: A chunk can only support a claim if:\n"
+                "  (a) the chunk text directly contains or clearly implies the claim's content, AND\n"
+                "  (b) the chunk's DOCUMENT is relevant to the User Question.\n"
+                "If a chunk's document is clearly unrelated to the question (e.g., the question is about one specific topic but the chunk is from a document addressing a different subject), return -1 for that claim — do not force a match.\n"
+                "If no chunk satisfies both conditions, return context_index: -1.\n"
+                "Respond ONLY with this JSON schema:\n"
                 '{"alignments": [{"claim_index": int, "context_index": int, "reason": str}]}'
             )
 
             try:
-                if settings.USE_LOCAL:
-                    response = self.client.chat(
-                        model=self.model,
-                        messages=[
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": prompt},
-                        ],
-                        options={
-                            "temperature": 0.0,
-                            "num_ctx": 8192,
-                            "num_predict": 4096,
-                        },
-                    )
-                    content = response["message"]["content"]
-                    from app.utils.json_parser import clean_json_string
+                content = llm.chat(
+                    system_prompt=system_instruction,
+                    user_prompt=prompt,
+                    temperature=0.0,
+                    json_mode=True,
+                    max_tokens=8192,
+                )
+                from app.utils.json_parser import clean_json_string
 
-                    try:
-                        cleaned_content = clean_json_string(content)
-                        parsed = AlignmentResponse.model_validate_json(
-                            cleaned_content
-                        )
-                        alignments = parsed.alignments
-                    except Exception as json_err:
-                        print(
-                            f"Pydantic JSON validate failed, running regex parser: {json_err}"
-                        )
-                        alignments = []
-                        matches_extracted = re.findall(
-                            r'(?:"claim_index"|\'claim_index\'|claim_index)\s*:\s*(-?[0-9]+)\s*,\s*'
-                            r'(?:"context_index"|\'context_index\'|context_index)\s*:\s*(-?[0-9]+)',
-                            content,
-                        )
-                        for m in matches_extracted:
-                            alignments.append(
-                                ClaimAlignment(
-                                    claim_index=int(m[0]),
-                                    context_index=int(m[1]),
-                                    reason="regex parsed",
-                                )
-                            )
-                else:
-                    response = call_with_retry(
-                        self.client.models.generate_content,
-                        model=self.model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            response_mime_type="application/json",
-                            response_schema=AlignmentResponse,
-                            temperature=0.0,
-                        ),
+                try:
+                    cleaned_content = clean_json_string(content)
+                    parsed = AlignmentResponse.model_validate_json(cleaned_content)
+                    alignments = parsed.alignments
+                except Exception as json_err:
+                    print(f"Pydantic JSON validate failed, running regex parser: {json_err}")
+                    alignments = []
+                    matches_extracted = re.findall(
+                        r'(?:"claim_index"|\'claim_index\'|claim_index)\s*:\s*(-?[0-9]+)\s*,\s*'
+                        r'(?:"context_index"|\'context_index\'|context_index)\s*:\s*(-?[0-9]+)',
+                        content,
                     )
-                    alignments = response.parsed.alignments
+                    for m in matches_extracted:
+                        alignments.append(
+                            ClaimAlignment(
+                                claim_index=int(m[0]),
+                                context_index=int(m[1]),
+                                reason="regex parsed",
+                            )
+                        )
 
                 # Process LLM alignments
                 for alignment in alignments:
@@ -242,20 +229,10 @@ class CitationVerifier:
         for c_idx, ctx_idx in alignments_map.items():
             metadata = retrieved_chunks[ctx_idx].chunk.metadata
 
-            # Filter out generic company name header blocks
-            blacklist = {
-                "SUPREET CHEMICALS LIMITED",
-                "SUPREET CHEMICALS LTD.",
-                "SUPREET CHEMICALS LTD",
-                "SUPREET",
-                "CHEMICALS",
-                "LIMITED",
-                "LTD",
-            }
             section_val = None
             for key in ["h3", "h2", "h1", "section"]:
                 val = metadata.get(key)
-                if val and str(val).strip().upper() not in blacklist:
+                if val and len(str(val).strip()) > 2:
                     section_val = str(val).strip()
                     break
             if not section_val:

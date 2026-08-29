@@ -40,6 +40,8 @@ def run_ingest_background(rebuild: bool = False):
         documents = pipeline.ingest(rebuild=rebuild)
         ingestion_status["status"] = "idle"
         ingestion_status["processed"] = len(documents)
+        
+
     except Exception as e:
         ingestion_status["status"] = "failed"
         ingestion_status["error"] = str(e)
@@ -284,6 +286,8 @@ def delete_document(document_id: str):
 
     # Remove from registry
     unregister_web_uploaded_id(document_id)
+
+
 
     return {
         "status": "success",

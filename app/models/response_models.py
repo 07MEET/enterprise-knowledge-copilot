@@ -7,10 +7,12 @@ class Citation(BaseModel):
     """
     A supporting citation returned with the answer.
     """
-
+    
+    id: int | None = None
     source: str
     page: int | str | None = None
     section: str | None = None
+    snippet: str | None = None
 
 
 class QueryResponse(BaseModel):
@@ -19,8 +21,8 @@ class QueryResponse(BaseModel):
     """
 
     answer: str
-
     citations: List[Citation] = Field(default_factory=list)
+    model_used: str | None = None
 
     confidence: float
 

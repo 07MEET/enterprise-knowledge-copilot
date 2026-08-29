@@ -14,8 +14,26 @@ class LocalEmbeddingModel(BaseEmbeddingModel):
         Initialize the local SentenceTransformer model.
         """
         import torch
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = SentenceTransformer(settings.EMBEDDING_MODEL, device=device)
+
+        # Default to CPU to ensure stability under heavy GPU load.
+        # Fall back to CUDA only if it initializes successfully.
+        device = "cpu"
+        if torch.cuda.is_available():
+            try:
+                # Test CUDA initialization before loading large model
+                torch.cuda.init()
+                device = "cuda"
+            except Exception:
+                device = "cpu"
+
+        try:
+            self.model = SentenceTransformer(settings.EMBEDDING_MODEL, device=device)
+        except Exception as e:
+            if device == "cuda":
+                print(f"[Embeddings] CUDA load failed: {e}. Falling back to CPU...")
+                self.model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
+            else:
+                raise e
 
     def embed_documents(
         self,

@@ -1,5 +1,6 @@
 import os
 import pickle
+import re
 from app.config.settings import settings
 from app.models.document_models import Chunk, RetrievedChunk
 from app.storage.vector_store import VectorStore
@@ -8,11 +9,26 @@ from rank_bm25 import BM25Okapi
 
 def tokenize(text: str) -> list[str]:
     """
-    Simple whitespace and punctuation-stripping tokenizer for BM25.
+    Tokenizer for BM25. Splits on whitespace and strips punctuation.
+    Also yields sub-words for hyphenated/underscored words (e.g. VL-JEPA -> vl, jepa, vl-jepa).
     """
     if not text:
         return []
-    return [word.lower().strip(".,!?;:()[]\"'") for word in text.split()]
+
+    words = text.split()
+    tokens = []
+    for word in words:
+        cleaned = word.lower().strip(".,!?;:()[]\"'")
+        if not cleaned:
+            continue
+        tokens.append(cleaned)
+        
+        # Split on hyphens, underscores, or slashes if present
+        if any(c in cleaned for c in ["-", "_", "/"]):
+            parts = [p.strip() for p in re.split(r"[-_/]", cleaned) if p.strip()]
+            tokens.extend(parts)
+            
+    return tokens
 
 
 class BM25Retriever:
